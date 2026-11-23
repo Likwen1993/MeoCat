@@ -1,0 +1,4 @@
+#ifndef MEOCAT_RESOURCES_H
+#define MEOCAT_RESOURCES_H
+#define IDI_MEOCAT 101
+#endif
