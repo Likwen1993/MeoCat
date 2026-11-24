@@ -65,6 +65,8 @@ enum MenuCmd : UINT {
     CMD_CLIPBOARD_50,
     CMD_CLIPBOARD_100,
     CMD_EYE_IVORY,
+    CMD_TOGGLE_WAND,
+    CMD_EYE_BLUE_GOLD,
     CMD_COAT_FIRST = 1100,
     CMD_KEYBOARD_FIRST = 1200,
     CMD_CLIPBOARD_FIRST = 1300
@@ -84,6 +86,8 @@ constexpr CoatMenuItem coatMenuItems[] = {
     { CatCoatTheme::Calico, EyeColorTheme::WarmAmber, L"三花猫" },
     { CatCoatTheme::BritishBlue, EyeColorTheme::WarmAmber, L"英短蓝猫" },
     { CatCoatTheme::Ragdoll, EyeColorTheme::SiameseBlue, L"布偶猫" },
+    { CatCoatTheme::WhiteTabby, EyeColorTheme::WarmAmber, L"狸白猫" },
+    { CatCoatTheme::SolidWhite, EyeColorTheme::BlueGold, L"异瞳白猫" },
 };
 
 constexpr UINT coatMenuCount = sizeof(coatMenuItems) / sizeof(coatMenuItems[0]);
@@ -122,7 +126,7 @@ struct AppState {
     bool isDragging = false;
     POINT dragStartCursor = {};
     POINT dragStartWinOrigin = {};
-    bool hasLastHover = false;
+    CatHitZone lastPetZone = CatHitZone::None;
     Pt lastHoverCanvas = {};
 
     // Reusable 32-bit premultiplied DIB backing buffer
@@ -287,6 +291,7 @@ HMENU createContextMenu(const AppState& app, PopupMenuStyle& style, Startup::Sta
     addEye(CMD_EYE_AMBER, L"琥珀金", EyeColorTheme::WarmAmber);
     addEye(CMD_EYE_CYAN, L"冰晶浅蓝", EyeColorTheme::IceCyan);
     addEye(CMD_EYE_IVORY, L"象牙白", EyeColorTheme::Ivory);
+    addEye(CMD_EYE_BLUE_GOLD, L"蓝金异瞳", EyeColorTheme::BlueGold);
     style.add(menu, MENU_EYES, L"眼睛颜色", L"◉", false, eyeMenu);
 
     HMENU scaleMenu = style.create();
@@ -334,6 +339,8 @@ HMENU createContextMenu(const AppState& app, PopupMenuStyle& style, Startup::Sta
     style.add(menu, CMD_TOGGLE_BADGES, L"显示键盘和鼠标提示", L"⌁", app.settings.showKeyDetails);
     style.add(menu, CMD_TOGGLE_TAIL, L"三键彩蛋 · 用尾巴按键", L"✦", app.settings.tailEasterEgg);
     style.add(menu, CMD_TOGGLE_PET, L"摸猫互动", L"♥", app.settings.petInteraction);
+    const bool wand = app.physics.wandEnabled();
+    style.add(menu, CMD_TOGGLE_WAND, wand ? L"收起逗猫棒" : L"拿出逗猫棒", L"✧", wand);
     style.add(menu, CMD_DEMO_BURST, L"演示打字", L"▶");
 
     style.divider(menu);
@@ -461,11 +468,15 @@ void showContextMenu(AppState& app, POINT screenPt) {
             app.settings.petInteraction = !app.settings.petInteraction;
             app.settings.saveToRegistry();
             break;
+        case CMD_TOGGLE_WAND:
+            app.physics.toggleWand();
+            break;
         case CMD_EYE_LIME:  app.settings.eyeTheme = EyeColorTheme::NeonChartreuse; app.settings.saveToRegistry(); break;
         case CMD_EYE_BLUE:  app.settings.eyeTheme = EyeColorTheme::SiameseBlue; app.settings.saveToRegistry(); break;
         case CMD_EYE_AMBER: app.settings.eyeTheme = EyeColorTheme::WarmAmber; app.settings.saveToRegistry(); break;
         case CMD_EYE_CYAN:  app.settings.eyeTheme = EyeColorTheme::IceCyan; app.settings.saveToRegistry(); break;
         case CMD_EYE_IVORY: app.settings.eyeTheme = EyeColorTheme::Ivory; app.settings.saveToRegistry(); break;
+        case CMD_EYE_BLUE_GOLD: app.settings.eyeTheme = EyeColorTheme::BlueGold; app.settings.saveToRegistry(); break;
         case CMD_SCALE_65:  app.settings.scale = 0.65f; applyWindowScaleAndPosition(app, true); break;
         case CMD_SCALE_85:  app.settings.scale = 0.85f; applyWindowScaleAndPosition(app, true); break;
         case CMD_SCALE_100: app.settings.scale = 1.00f; applyWindowScaleAndPosition(app, true); break;
@@ -517,7 +528,7 @@ void tickAndRender(AppState& app) {
     int w = std::max(1, (int)(wr.right - wr.left));
     int h = std::max(1, (int)(wr.bottom - wr.top));
 
-    app.physics.step(dt, wr, app.input, app.settings);
+    app.physics.step(dt, wr, app.input, app.settings, !app.isDragging);
 
     // Smart Click-Through + Petting Detection
     if (!app.isDragging) {
@@ -529,24 +540,26 @@ void tickAndRender(AppState& app) {
                 (float)(cur.y - wr.top)  / (float)h * CatPhysics::CanvasHeight
             };
             CatHitZone zone = CatRenderer::hitTest(cp, app.physics);
-            if (zone == CatHitZone::Head || zone == CatHitZone::Body) {
-                if (app.hasLastHover) {
+            if (!app.physics.wandEnabled() && (zone == CatHitZone::Head || zone == CatHitZone::Body)) {
+                if (app.lastPetZone == zone) {
                     float d = std::hypot(cp.x - app.lastHoverCanvas.x, cp.y - app.lastHoverCanvas.y);
                     if (d > 1.2f && d < 80.0f) {
                         app.physics.registerPetStroke(cp, d, zone == CatHitZone::Head, app.settings);
                     }
                 }
                 app.lastHoverCanvas = cp;
-                app.hasLastHover = true;
+                app.lastPetZone = zone;
             } else {
-                app.hasLastHover = false;
+                app.lastPetZone = CatHitZone::None;
             }
             bool clickThrough = app.settings.fullClickThrough || (zone == CatHitZone::None);
             setClickThrough(app.hwnd, clickThrough);
         } else {
-            app.hasLastHover = false;
+            app.lastPetZone = CatHitZone::None;
             setClickThrough(app.hwnd, true);
         }
+    } else {
+        app.lastPetZone = CatHitZone::None;
     }
 
     // Render 32-bit Premultiplied ARGB frame directly into DIB and present via UpdateLayeredWindow

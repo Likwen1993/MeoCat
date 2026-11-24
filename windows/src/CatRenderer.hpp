@@ -12,7 +12,8 @@
 enum class CatHitZone {
     None,
     Head,
-    Body
+    Body,
+    Controls
 };
 
 class CatRenderer {
@@ -21,19 +22,25 @@ public:
     enum class Preview { Coat, Keyboard, Eyes };
 
     static CatHitZone hitTest(Pt p, const CatPhysics& physics) {
+        using namespace Gdiplus;
         const float cx = FlatCatRenderer::seatX(physics);
-        const float breath = std::sin(physics.time * 2.1f) * 1.6f;
-        const Pt offset = FlatCatRenderer::headOffset(physics, breath);
-        const Pt headCenter = {cx + offset.x, 136.0f + offset.y + FlatCatRenderer::BodyDrop};
-        float hdx = (p.x - headCenter.x) / 48.0f;
-        float hdy = (p.y - headCenter.y) / 42.0f;
-        if (hdx * hdx + hdy * hdy <= 1.0f) return CatHitZone::Head;
-
-        float bdx = (p.x - cx) / 58.0f;
-        float bdy = (p.y - (196.0f + FlatCatRenderer::BodyDrop)) / 56.0f;
-        if (bdx * bdx + bdy * bdy <= 1.0f) return CatHitZone::Body;
-
-        if (p.x >= 58.0f && p.x <= 294.0f && p.y >= 232.0f && p.y <= 296.0f) return CatHitZone::Body;
+        PointF art = FlatCatRenderer::toArt(p, cx, CatPhysics::SeatAnchor.y + FlatCatRenderer::BodyDrop);
+        if (art.X > 390.0f && art.X < 960.0f && art.Y > 235.0f && art.Y < 877.0f) {
+            FlatCatRenderer::HeadPose pose(physics, std::sin(physics.time * 2.1f) * 1.6f);
+            GraphicsPath outline;
+            FlatCatRenderer::bodyOutline(outline);
+            FlatCatRenderer::deformPath(outline, [&](PointF* points, INT count) {pose.moveBodyPoints(points, count);});
+            if (outline.IsVisible(art)) {
+                // Classify the head in its own coordinates so turning doesn't move the neck cutoff.
+                pose.transform.Invert();
+                pose.transform.TransformPoints(&art, 1);
+                return art.Y <= 605.0f ? CatHitZone::Head : CatHitZone::Body;
+            }
+        }
+        const float bdx = (p.x - cx) / 58.0f;
+        const float bdy = (p.y - (196.0f + FlatCatRenderer::BodyDrop)) / 56.0f;
+        if (bdx * bdx + bdy * bdy <= 1.0f) return CatHitZone::Controls;
+        if (p.x >= 58.0f && p.x <= 294.0f && p.y >= 232.0f && p.y <= 296.0f) return CatHitZone::Controls;
         return CatHitZone::None;
     }
 
@@ -49,6 +56,7 @@ public:
         drawKeyboard(g, physics, settings.keyboardTheme, settings.eyeTheme, settings.showKeyDetails);
 
         FlatCatRenderer::draw(g, physics, settings.coatTheme, settings.eyeTheme, breath);
+        if (physics.wandEnabled()) drawWand(g, physics.wandTip());
 
         // Floating Keycap Badges
         if (settings.showKeyDetails) {
@@ -98,6 +106,7 @@ private:
             case EyeColorTheme::WarmAmber:      return Gdiplus::Color(a, 250, 194, 56);
             case EyeColorTheme::IceCyan:        return Gdiplus::Color(a, 115, 235, 245);
             case EyeColorTheme::Ivory:         return Gdiplus::Color(a, 255, 253, 247);
+            case EyeColorTheme::BlueGold:      return Gdiplus::Color(a, 107, 204, 245);
         }
         return Gdiplus::Color(a, 201, 242, 64);
     }
@@ -131,6 +140,61 @@ private:
         Gdiplus::PointF c1(p0.x + (2.0f / 3.0f) * (ctrl.x - p0.x), p0.y + (2.0f / 3.0f) * (ctrl.y - p0.y));
         Gdiplus::PointF c2(p2.x + (2.0f / 3.0f) * (ctrl.x - p2.x), p2.y + (2.0f / 3.0f) * (ctrl.y - p2.y));
         p.AddBezier(Gdiplus::PointF(p0.x, p0.y), c1, c2, Gdiplus::PointF(p2.x, p2.y));
+    }
+
+    static void drawWand(Gdiplus::Graphics& g, Pt lure) {
+        using namespace Gdiplus;
+        const auto state = g.Save();
+        g.TranslateTransform(lure.x, lure.y);
+        const Color ink(80, 48, 74);
+
+        const auto shaft = g.Save();
+        const float tilt = std::clamp((CatPhysics::SeatAnchor.x + 35.0f - lure.x) / 70.0f, 0.0f, 1.0f);
+        g.TranslateTransform(4.0f, -10.0f);
+        g.RotateTransform(-81.0f * tilt);
+        g.TranslateTransform(-4.0f, 10.0f);
+        GraphicsPath rod;
+        addQuadBezier(rod, {19, -42}, {52, -69}, {78, -97});
+        FlatCatRenderer::strokePath(g, rod, ink, 6.4f);
+        FlatCatRenderer::strokePath(g, rod, Color(203, 135, 188), 3.1f);
+        GraphicsPath grip;
+        addQuadBezier(grip, {59, -78}, {68, -87}, {78, -97});
+        FlatCatRenderer::strokePath(g, grip, ink, 9.0f);
+        FlatCatRenderer::strokePath(g, grip, Color(158, 99, 152), 5.6f);
+        Pen gold(Color(247, 200, 117), 2.1f);
+        g.DrawLine(&gold, 56.0f, -81.0f, 62.0f, -75.0f);
+
+        GraphicsPath thread;
+        addQuadBezier(thread, {19, -42}, {22, -28}, {4, -10});
+        FlatCatRenderer::strokePath(g, thread, Color(255, 245, 227), 2.6f);
+        FlatCatRenderer::strokePath(g, thread, Color(127, 87, 108), 1.05f);
+        g.Restore(shaft);
+
+        GraphicsPath lilac;
+        lilac.AddBezier(4, -11, 14, -12, 22, -2, 16, 13);
+        lilac.AddBezier(16, 13, 6, 10, 2, 1, 4, -11);
+        lilac.CloseFigure();
+        FlatCatRenderer::brushPath(g, lilac, Color(186, 147, 223));
+        FlatCatRenderer::strokePath(g, lilac, ink, 1.45f);
+
+        GraphicsPath pink;
+        pink.AddBezier(4, -11, -7, -16, -20, -2, -14, 14);
+        pink.AddBezier(-14, 14, 0, 12, 8, -2, 4, -11);
+        pink.CloseFigure();
+        FlatCatRenderer::brushPath(g, pink, Color(245, 150, 167));
+        FlatCatRenderer::strokePath(g, pink, ink, 1.45f);
+
+        GraphicsPath quills;
+        addQuadBezier(quills, {4, -9}, {-5, 2}, {-11, 9});
+        quills.StartFigure();
+        addQuadBezier(quills, {6, -8}, {13, 0}, {15, 8});
+        FlatCatRenderer::strokePath(g, quills, Color(255, 224, 231), 1.15f);
+        SolidBrush bell(Color(255, 208, 113));
+        Pen edge(ink, 1.3f);
+        g.FillEllipse(&bell, 0.0f, -14.5f, 8.5f, 8.5f);
+        g.DrawEllipse(&edge, 0.0f, -14.5f, 8.5f, 8.5f);
+        g.DrawLine(&edge, 2.9f, -9.4f, 5.7f, -8.8f);
+        g.Restore(state);
     }
 
     static void drawMouse(Gdiplus::Graphics& g, const CatPhysics& physics, KeyboardTheme theme) {
@@ -410,24 +474,37 @@ private:
         FontFamily ff(L"Segoe UI");
 
         for (const auto& sp : physics.sparkles) {
+            if (sp.age < 0.0f) continue;
             float p = std::min(1.0f, sp.age / sp.lifetime);
-            BYTE a = (BYTE)(std::sin(p * 3.14159f) * 215.0f);
+            const auto ease = [](float value) {
+                const float t = std::clamp(value, 0.0f, 1.0f);
+                return t * t * (3.0f - 2.0f * t);
+            };
+            const float fade = ease((p - 0.57f) / 0.43f);
+            const float opacity = sp.isSleepZ ? ease(p / 0.24f) * (1.0f - fade) : std::sin(p * 3.14159f);
+            const BYTE a = static_cast<BYTE>(opacity * 248.0f);
             if (a < 4) continue;
 
-            Color c(a, baseCol.GetR(), baseCol.GetG(), baseCol.GetB());
+            const Color c = blendColor(Color(a, baseCol.GetR(), baseCol.GetG(), baseCol.GetB()),
+                                       Color(a, 255, 251, 241), 0.22f);
             if (sp.isSleepZ) {
-                constexpr float size = 16.0f;
+                const float size = 12.5f + 6.5f * std::sin(p * 3.14159f);
                 GraphicsPath letter;
                 StringFormat fmt;
-                letter.AddString(L"Z", 1, &ff, FontStyleBold, size + p * 4.0f,
+                letter.AddString(L"Z", 1, &ff, FontStyleBold, size,
                                  PointF(sp.position.x, sp.position.y), &fmt);
-                Pen outline(Color(a, 49, 41, 45), 1.65f);
+                if (fade > 0.0f) {
+                    Pen softEdge(Color(static_cast<BYTE>(a * fade * 0.30f), 70, 52, 62), 2.5f + fade * 3.0f);
+                    softEdge.SetLineJoin(LineJoinRound);
+                    g.DrawPath(&softEdge, &letter);
+                }
+                Pen outline(Color(a, 49, 41, 45), 1.5f + size * 0.045f);
                 outline.SetLineJoin(LineJoinRound);
                 SolidBrush fill(c);
                 g.DrawPath(&outline, &letter);
                 g.FillPath(&fill, &letter);
             } else {
-                float r = 3.5f + p * 1.5f;
+                const float r = 5.3f + p * 2.0f;
                 GraphicsState st = g.Save();
                 g.TranslateTransform(sp.position.x, sp.position.y);
                 GraphicsPath star;
@@ -436,7 +513,10 @@ private:
                 addQuadBezier(star, {0, r}, {-0.8f, 0.8f}, {-r, 0});
                 addQuadBezier(star, {-r, 0}, {-0.8f, -0.8f}, {0, -r});
                 star.CloseFigure();
+                Pen outline(Color(a, 75, 55, 70), 1.65f);
+                outline.SetLineJoin(LineJoinRound);
                 SolidBrush sb(c);
+                g.DrawPath(&outline, &star);
                 g.FillPath(&sb, &star);
                 g.Restore(st);
             }

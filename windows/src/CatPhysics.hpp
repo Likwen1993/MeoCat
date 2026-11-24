@@ -16,7 +16,9 @@ enum class CatCoatTheme : int {
     Tuxedo,
     Calico,
     BritishBlue = 6,
-    Ragdoll = 7
+    Ragdoll = 7,
+    WhiteTabby = 8,
+    SolidWhite = 9
 };
 
 enum class KeyboardTheme : int {
@@ -34,7 +36,8 @@ enum class EyeColorTheme : int {
     SiameseBlue = 1,
     WarmAmber = 2,
     IceCyan = 3,
-    Ivory = 4
+    Ivory = 4,
+    BlueGold = 5
 };
 
 struct CatSettings {
@@ -71,7 +74,7 @@ struct CatSettings {
         scale            = std::clamp((float)readDword(L"ScalePct", 100) / 100.0f, 0.5f, 2.0f);
         const DWORD savedCoat = readDword(L"CoatTheme", 0);
         constexpr DWORD removedSilverTabby = 5;
-        if (savedCoat <= static_cast<DWORD>(CatCoatTheme::Ragdoll) && savedCoat != removedSilverTabby) {
+        if (savedCoat <= static_cast<DWORD>(CatCoatTheme::SolidWhite) && savedCoat != removedSilverTabby) {
             coatTheme = static_cast<CatCoatTheme>(savedCoat);
         }
         const DWORD savedKeyboard = readDword(L"KeyboardTheme", 0);
@@ -79,7 +82,7 @@ struct CatSettings {
             keyboardTheme = static_cast<KeyboardTheme>(savedKeyboard);
         }
         const DWORD savedEye = savedCoat == removedSilverTabby ? 0 : readDword(L"EyeTheme", 0);
-        if (savedEye <= static_cast<DWORD>(EyeColorTheme::Ivory)) {
+        if (savedEye <= static_cast<DWORD>(EyeColorTheme::BlueGold)) {
             eyeTheme = static_cast<EyeColorTheme>(savedEye);
         }
         DWORD hasPos     = readDword(L"HasPos", 0);
@@ -174,6 +177,9 @@ public:
     static constexpr float BodyMotionAmount = 0.72f;
     static constexpr Pt TailRootOffset = { 42.0f, -3.12f };
     static constexpr float AsleepThreshold = 0.8f;
+    static constexpr double DrowsyAfter = 45.0;
+    static constexpr double SleepAfter = 60.0;
+    static constexpr Pt WandRest = {250.0f, 151.0f};
 
     Spring2D leftPaw{LeftPawRest};
     Spring2D rightPaw{RightPawRest};
@@ -209,6 +215,24 @@ public:
     float time = 0.0f;
     float tailPhase = 0.0f;
 
+    bool wandEnabled() const { return wandEnabled_; }
+
+    void toggleWand() {
+        wandEnabled_ = !wandEnabled_;
+        lastWandToggleTime_ = nowSeconds();
+        wandSwipeTime_ = 0.0f;
+        if (wandEnabled_) {
+            wandLure_ = Spring2D(WandRest);
+            sleepiness = 0.0f;
+            petHeadIntensity = petBodyIntensity = 0.0f;
+        }
+    }
+
+    Pt wandTip() const {
+        const Pt lure = wandLure_.point();
+        return {lure.x, lure.y + std::sin(time * 8.3f) * 1.25f};
+    }
+
     Pt tailRoot() const {
         return { SeatAnchor.x + bodyShiftX.value * BodyMotionAmount + TailRootOffset.x,
                  SeatAnchor.y + TailRootOffset.y };
@@ -226,7 +250,7 @@ public:
 
     float effectiveEyeClosure() const {
         float petClose = std::max(petHeadIntensity, petBodyIntensity * 0.62f);
-        float sleepClose = sleepiness / AsleepThreshold;
+        const float sleepClose = sleepiness >= AsleepThreshold ? 1.0f : sleepiness / AsleepThreshold * 0.87f;
         return std::min(1.0f, std::max(blinkProgress_, std::max(petClose, sleepClose)));
     }
 
@@ -299,6 +323,14 @@ public:
         if (isHead) {
             petHeadIntensity = std::min(1.0f, petHeadIntensity + energy + 0.08f);
             petBodyIntensity = std::max(petBodyIntensity, petHeadIntensity * 0.6f);
+            if (petHeadIntensity > 0.55f && petSparkleCooldown_ <= 0.0f) {
+                petSparkleCooldown_ = 0.42f;
+                sparkles.push_back({
+                    { SeatAnchor.x + randRange(-44.0f, 44.0f), 88.0f + randRange(-14.0f, 18.0f) },
+                    { randRange(-10.0f, 10.0f), -24.0f },
+                    0.0f, 1.12f, false
+                });
+            }
         } else {
             petBodyIntensity = std::min(1.0f, petBodyIntensity + energy + 0.07f);
         }
@@ -314,7 +346,8 @@ public:
         headOffsetY.velocity += 18.0f;
     }
 
-    void step(float rawDt, const RECT& windowRect, InputEngine& engine, const CatSettings& settings) {
+    void step(float rawDt, const RECT& windowRect, InputEngine& engine, const CatSettings& settings,
+              bool allowWandPlay = true) {
         float dt = std::min(rawDt, 1.0f / 25.0f);
         time += dt;
         engine.pollMouse(dt);
@@ -322,24 +355,18 @@ public:
         double now = nowSeconds();
         const auto& activeKeys = engine.activeKeys;
         const auto& orderedKeys = engine.pressedOrder;
+        const bool wandUnderCursor = updateWand(dt, windowRect, engine.lastCursorPos, allowWandPlay);
+        const bool wandBeingPlayed = wandUnderCursor &&
+            now - std::max(lastWandToggleTime_, engine.lastMouseMoveTime) < 2.5;
 
         // 1. Petting decay & sparkles
+        petSparkleCooldown_ = std::max(0.0f, petSparkleCooldown_ - dt);
         if (now - lastPetTime_ > 0.28) {
             petHeadIntensity = std::max(0.0f, petHeadIntensity - dt * 1.4f);
             petBodyIntensity = std::max(0.0f, petBodyIntensity - dt * 1.2f);
             if (petHeadIntensity < 0.05f && petBodyIntensity < 0.05f) {
                 isCurrentlyPetting_ = false;
                 petStrokeAccum_ = 0.0f;
-            }
-        } else if (petHeadIntensity > 0.55f || petBodyIntensity > 0.55f) {
-            petSparkleCooldown_ -= dt;
-            if (petSparkleCooldown_ <= 0.0f) {
-                petSparkleCooldown_ = 0.42f;
-                sparkles.push_back({
-                    { SeatAnchor.x + randRange(-44.0f, 44.0f), 88.0f + randRange(-14.0f, 18.0f) },
-                    { randRange(-10.0f, 10.0f), -24.0f },
-                    0.0f, 0.9f, false
-                });
             }
         }
 
@@ -348,19 +375,26 @@ public:
             lastHeldInputTime_ = now;
         }
         const double lastActivity = std::max({engine.lastKeyActivityTime, engine.lastMouseMoveTime,
-                                              lastPetTime_, lastHeldInputTime_});
+                                              lastPetTime_, lastHeldInputTime_, lastWandToggleTime_});
         const double idleSec = now - lastActivity;
-        const bool canSleep = idleSec > 45.0;
-        if (canSleep) {
-            float targetSleep = std::min(1.0f, (float)((idleSec - 45.0) / 35.0));
-            sleepiness += (targetSleep - sleepiness) * dt * 1.5f;
-            if (sleepiness >= AsleepThreshold) {
-                sleepZCooldown_ -= dt;
-                if (sleepZCooldown_ <= 0.0f) {
-                    sleepZCooldown_ = 2.3f;
-                    sparkles.push_back({ { SeatAnchor.x + 56.0f, 103.0f }, { 12.0f, -18.0f }, 0.0f, 1.5f, true });
+        const bool drowsy = idleSec >= DrowsyAfter;
+        const bool asleep = idleSec >= SleepAfter;
+        if (asleep) {
+            sleepiness = std::max(AsleepThreshold, sleepiness);
+            sleepiness += (1.0f - sleepiness) * dt * 1.5f;
+            sleepZCooldown_ -= dt;
+            if (sleepZCooldown_ <= 0.0f) {
+                sleepZCooldown_ = 2.3f;
+                constexpr float rise[] = {0.0f, 15.5f, 30.0f};
+                for (int i = 0; i < 3; ++i) {
+                    sparkles.push_back({
+                        { SeatAnchor.x + 55.0f + 20.0f * i, 106.0f - rise[i] },
+                        { 8.0f, -13.0f }, -0.24f * i, 1.5f, true
+                    });
                 }
             }
+        } else if (drowsy) {
+            sleepiness = AsleepThreshold * static_cast<float>((idleSec - DrowsyAfter) / (SleepAfter - DrowsyAfter));
         } else {
             sleepiness = std::max(0.0f, sleepiness - dt * 5.0f);
             sleepZCooldown_ = 0.0f;
@@ -368,7 +402,7 @@ public:
 
         // 2b. Fast Mouse Movement -> Hunting Mode (big round boba pupils + low crouch!)
         float mouseSpeed = std::hypot(engine.mouseVelocity.x, engine.mouseVelocity.y);
-        if (mouseSpeed > 460.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
+        if (!wandUnderCursor && mouseSpeed > 460.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
             float boost = std::min(1.0f, (mouseSpeed - 460.0f) / 1100.0f);
             huntIntensity.target = std::min(1.0f, huntIntensity.target + (0.45f + boost * 1.15f) * dt);
             sleepiness = 0.0f;
@@ -431,16 +465,31 @@ public:
 
         Pt liveMouse = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y };
 
+        const bool swiping = wandBeingPlayed && leftKey == PhysicalKey::None && rightKey == PhysicalKey::None;
+        if (swiping && wandSwipeTime_ == 0.0f) {
+            wandUsesLeftPaw_ = wandLure_.x.target < SeatAnchor.x;
+        }
+        const float swipeAmount = swiping
+            ? std::sin(std::min(1.0f, wandSwipeTime_ / 0.62f) * 3.14159265f) : 0.0f;
+        const Pt lure = swiping ? wandTip() : WandRest;
+        const float wandReach = std::max(0.0f, swipeAmount);
+        if (swiping) {
+            wandSwipeTime_ += dt;
+            if (wandSwipeTime_ >= 0.88f) wandSwipeTime_ = 0.0f;
+        } else {
+            wandSwipeTime_ = 0.0f;
+        }
+
         if (leftKey != PhysicalKey::None) {
             leftPaw.setTarget(KeyboardLayout::canvasPointForKey(leftKey));
             leftPawTyping = true;
             leftPawOnMouse = false;
-        } else if (mouseRecent && sleepiness < 0.3f) {
+        } else if (!wandUnderCursor && mouseRecent && sleepiness < 0.3f) {
             leftPaw.setTarget({ liveMouse.x + 2.0f, liveMouse.y - 3.0f });
             leftPawTyping = false;
             leftPawOnMouse = true;
         } else {
-            leftPaw.setTarget(LeftPawRest);
+            leftPaw.setTarget(swiping && wandUsesLeftPaw_ ? swipeTarget(LeftPawRest, lure, wandReach) : LeftPawRest);
             leftPawTyping = false;
             leftPawOnMouse = false;
         }
@@ -449,7 +498,7 @@ public:
             rightPaw.setTarget(KeyboardLayout::canvasPointForKey(rightKey));
             rightPawTyping = true;
         } else {
-            rightPaw.setTarget(RightPawRest);
+            rightPaw.setTarget(swiping && !wandUsesLeftPaw_ ? swipeTarget(RightPawRest, lure, wandReach) : RightPawRest);
             rightPawTyping = false;
         }
 
@@ -469,7 +518,10 @@ public:
 
         // 4. Body lean, squash & ear motion
         float targetShiftX = 0.0f, targetBodyTilt = 0.0f;
-        if (leftPawOnMouse && !rightPawTyping) {
+        if (swiping) {
+            targetShiftX = (lure.x - SeatAnchor.x) * 0.10f * wandReach;
+            targetBodyTilt = targetShiftX * 0.006f;
+        } else if (leftPawOnMouse && !rightPawTyping) {
             targetShiftX = -10.0f;
             targetBodyTilt = -0.075f;
         } else if (leftPawOnMouse && rightPawTyping) {
@@ -514,7 +566,10 @@ public:
         float cursorNY = curMag > 0.001f ? (curDy / curMag) * clampedCur : 0.0f;
 
         float lookX = cursorNX, lookY = cursorNY;
-        if (typingRecently && !mouseMovedRecently && hasLastTypedPoint_) {
+        if (swiping) {
+            lookX = std::clamp((lure.x - eyeOrigin.x) / 72.0f, -1.0f, 1.0f);
+            lookY = std::clamp((lure.y - eyeOrigin.y) / 90.0f, -1.0f, 1.0f);
+        } else if (typingRecently && !mouseMovedRecently && hasLastTypedPoint_) {
             lookX = std::clamp((lastTypedPoint_.x - eyeOrigin.x) / 95.0f, -0.85f, 0.85f);
             lookY = std::clamp((lastTypedPoint_.y - eyeOrigin.y) / 125.0f, -0.3f, 0.92f);
         } else if (typingRecently && mouseMovedRecently && hasLastTypedPoint_) {
@@ -604,15 +659,48 @@ public:
         for (int i = (int)sparkles.size() - 1; i >= 0; --i) {
             auto& sp = sparkles[i];
             sp.age += dt;
-            sp.position.x += sp.velocity.x * dt;
-            sp.position.y += sp.velocity.y * dt;
-            if (sp.age >= sp.lifetime || (sp.isSleepZ && !canSleep)) {
+            const float visibleDt = std::clamp(sp.age, 0.0f, dt);
+            sp.position.x += sp.velocity.x * visibleDt;
+            sp.position.y += sp.velocity.y * visibleDt;
+            if (sp.age >= sp.lifetime || (sp.isSleepZ && !asleep)) {
                 sparkles.erase(sparkles.begin() + i);
             }
         }
     }
 
 private:
+    bool wandEnabled_ = false;
+    bool wandUsesLeftPaw_ = false;
+    Spring2D wandLure_{WandRest};
+    float wandSwipeTime_ = 0.0f;
+    double lastWandToggleTime_ = 0.0;
+
+    bool updateWand(float dt, const RECT& rect, POINT cursor, bool allowWandPlay) {
+        if (!wandEnabled_) return false;
+        Pt target = WandRest;
+        const bool follows = allowWandPlay && PtInRect(&rect, cursor);
+        if (follows) {
+            const float width = static_cast<float>(rect.right - rect.left);
+            const float height = static_cast<float>(rect.bottom - rect.top);
+            target = {
+                std::clamp((cursor.x - rect.left) * CanvasWidth / width, 108.0f, 263.0f),
+                std::clamp((cursor.y - rect.top) * CanvasHeight / height, 128.0f, 219.0f)
+            };
+        }
+        wandLure_.setTarget(target);
+        wandLure_.step(dt, 305.0f, 28.0f);
+        return follows;
+    }
+
+    static Pt swipeTarget(Pt rest, Pt lure, float amount) {
+        // Leave room for the paw pad beyond the arm's target point.
+        const float dx = lure.x - rest.x;
+        const float dy = lure.y - rest.y;
+        const float distance = std::hypot(dx, dy);
+        const float reach = amount * std::max(0.0f, 1.0f - 5.0f / std::max(1.0f, distance));
+        return {rest.x + dx * reach, rest.y + dy * reach};
+    }
+
     float tailAngleReference_ = 0.0f;
 
     float principalTailAngle() const {

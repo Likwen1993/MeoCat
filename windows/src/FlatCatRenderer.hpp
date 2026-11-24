@@ -40,6 +40,17 @@ struct HeadPose {
                         1.0f - 0.08f * MotionAmount * pitch * pitch);
         transform.Translate(-OriginX, -489.0f);
     }
+
+    void moveBodyPoints(PointF* points, INT count) const {
+        std::vector<PointF> moved(points, points + count);
+        transform.TransformPoints(moved.data(), count);
+        for (INT i = 0; i < count; ++i) {
+            const float t = std::clamp((755.0f - points[i].Y) / 145.0f, 0.0f, 1.0f);
+            const float follow = t * t * (3.0f - 2.0f * t);
+            points[i].X += (moved[i].X - points[i].X) * follow;
+            points[i].Y += (moved[i].Y - points[i].Y) * follow;
+        }
+    }
 };
 
 template <class Motion>
@@ -85,6 +96,12 @@ inline Palette palette(CatCoatTheme coat) {
         case CatCoatTheme::GingerTabby:
             return {{253, 174, 85}, {73, 45, 28}, {73, 45, 28}, {245, 218, 185},
                     {253, 174, 85}, {218, 123, 51}, {255, 239, 215}, {247, 177, 146}, {255, 248, 231}};
+        case CatCoatTheme::WhiteTabby:
+            return {{169, 122, 88}, {61, 44, 36}, {61, 44, 36}, {247, 236, 225},
+                    {169, 122, 88}, {92, 63, 48}, {255, 249, 241}, {246, 171, 163}, {255, 249, 241}};
+        case CatCoatTheme::SolidWhite:
+            return {{255, 254, 252}, {35, 31, 39}, {35, 31, 39}, {240, 234, 237},
+                    {255, 254, 252}, {255, 254, 252}, {255, 254, 252}, {250, 181, 174}, {45, 40, 47}};
         default:
             return {cream, ink, ink, {248, 232, 211}, cream, charcoal, cream, pink, cream};
     }
@@ -118,13 +135,13 @@ inline void tail(Graphics& g, CatCoatTheme coat, const Palette& fur) {
     shape.CloseFigure();
     brushPath(g, shape, fur.tail);
     if (coat != CatCoatTheme::Calico && coat != CatCoatTheme::Tuxedo &&
-        coat != CatCoatTheme::GingerTabby) {
+        coat != CatCoatTheme::GingerTabby && coat != CatCoatTheme::WhiteTabby) {
         strokePath(g, shape, fur.outline, 14.5f);
         return;
     }
     const auto state = g.Save();
     g.SetClip(&shape, CombineModeIntersect);
-    if (coat == CatCoatTheme::GingerTabby) {
+    if (coat == CatCoatTheme::GingerTabby || coat == CatCoatTheme::WhiteTabby) {
         for (float step : {0.0f, 47.0f, 94.0f}) {
             GraphicsPath stripe;
             stripe.AddBezier(862.0f + step, 735.0f - step * 0.80f,
@@ -133,6 +150,11 @@ inline void tail(Graphics& g, CatCoatTheme coat, const Palette& fur) {
                              941.0f + step, 823.0f - step * 0.80f);
             strokePath(g, stripe, fur.marking, 27.0f);
         }
+    }
+    if (coat == CatCoatTheme::WhiteTabby) {
+        g.Restore(state);
+        strokePath(g, shape, fur.outline, 14.5f);
+        return;
     }
     if (coat == CatCoatTheme::Calico) {
         GraphicsPath band;
@@ -218,8 +240,22 @@ inline void drawPointEars(Graphics& g, Color color) {
     brushPath(g, crown, color);
 }
 
+template <size_t N>
+inline void addMirroredFacePath(GraphicsPath& path, const PointF (&half)[N]) {
+    static_assert(N > 1 && (N - 1) % 3 == 0);
+    const auto point = [&](size_t index, float sign) {
+        return PointF(PointFaceCenter + half[index].X * sign, half[index].Y);
+    };
+    for (size_t i = 0; i + 3 < N; i += 3) {
+        path.AddBezier(point(i, 1.0f), point(i + 1, 1.0f), point(i + 2, 1.0f), point(i + 3, 1.0f));
+    }
+    for (size_t i = N - 1; i >= 3; i -= 3) {
+        path.AddBezier(point(i, -1.0f), point(i - 1, -1.0f), point(i - 2, -1.0f), point(i - 3, -1.0f));
+    }
+    path.CloseFigure();
+}
+
 inline void drawRagdollMarkings(Graphics& g, Color color) {
-    // Trace half of the mask from the forehead to the white blaze, then mirror it.
     const PointF half[] = {
         {0.0f, 406.0f},
         {79.0f, 406.0f}, {143.0f, 444.0f}, {159.0f, 510.0f},
@@ -227,17 +263,8 @@ inline void drawRagdollMarkings(Graphics& g, Color color) {
         {66.0f, 575.0f}, {43.0f, 542.0f}, {37.0f, 487.0f},
         {33.0f, 450.0f}, {18.0f, 428.0f}, {0.0f, 428.0f}
     };
-    const auto point = [&](size_t index, float sign) {
-        return PointF(PointFaceCenter + half[index].X * sign, half[index].Y);
-    };
     GraphicsPath mask;
-    for (size_t i = 0; i + 3 < std::size(half); i += 3) {
-        mask.AddBezier(point(i, 1.0f), point(i + 1, 1.0f), point(i + 2, 1.0f), point(i + 3, 1.0f));
-    }
-    for (size_t i = std::size(half) - 1; i >= 3; i -= 3) {
-        mask.AddBezier(point(i, -1.0f), point(i - 1, -1.0f), point(i - 2, -1.0f), point(i - 3, -1.0f));
-    }
-    mask.CloseFigure();
+    addMirroredFacePath(mask, half);
     softPatch(g, mask, color);
 }
 
@@ -272,6 +299,15 @@ inline void drawFaceMarkings(Graphics& g, CatCoatTheme coat, const Palette& fur)
             softPatch(g, mask, fur.marking);
             break;
         }
+        case CatCoatTheme::WhiteTabby:
+            for (float side : {-1.0f, 0.0f, 1.0f}) {
+                const float x = PointFaceCenter + side * 42.0f;
+                GraphicsPath stripe;
+                stripe.AddBezier(x + side * 6.0f, 374.0f, x + side * 4.0f, 386.0f,
+                                 x - side * 4.0f, 405.0f, x - side * 5.0f, 420.0f);
+                strokePath(g, stripe, fur.marking, 23.0f);
+            }
+            break;
         case CatCoatTheme::GingerTabby:
             for (float x : {640.0f, 683.0f, 726.0f}) {
                 GraphicsPath stripe;
@@ -285,6 +321,21 @@ inline void drawFaceMarkings(Graphics& g, CatCoatTheme coat, const Palette& fur)
 }
 
 template <class Motion>
+inline void drawWhiteTabbyBib(Graphics& g, Color color, Motion motion) {
+    const PointF half[] = {
+        {0.0f, 456.0f},
+        {14.0f, 456.0f}, {39.0f, 549.0f}, {166.0f, 588.0f},
+        {148.0f, 614.0f}, {122.0f, 628.0f}, {102.0f, 643.0f},
+        {148.0f, 729.0f}, {87.0f, 787.0f}, {91.0f, 878.0f},
+        {60.0f, 878.0f}, {30.0f, 878.0f}, {0.0f, 878.0f}
+    };
+    GraphicsPath bib;
+    addMirroredFacePath(bib, half);
+    deformPath(bib, motion);
+    brushPath(g, bib, color);
+}
+
+template <class Motion>
 inline void drawFlanks(Graphics& g, CatCoatTheme coat, const Palette& fur, Motion motion) {
     if (coat == CatCoatTheme::Calico) {
         drawCalicoFlanks(g, motion);
@@ -295,17 +346,25 @@ inline void drawFlanks(Graphics& g, CatCoatTheme coat, const Palette& fur, Motio
             deformPath(spot, motion);
             brushPath(g, spot, fur.marking);
         }
-    } else if (coat == CatCoatTheme::GingerTabby) {
+    } else if (coat == CatCoatTheme::GingerTabby || coat == CatCoatTheme::WhiteTabby) {
+        const bool whiteTabby = coat == CatCoatTheme::WhiteTabby;
         for (float side : {-1.0f, 1.0f}) {
-            for (float y : {497.0f, 553.0f, 636.0f, 691.0f}) {
-                const float edge = side < 0.0f ? 475.0f : 874.0f;
-                const float length = y == 553.0f ? 35.0f : 65.0f;
+            const std::array<float, 5> levels = {497.0f, 553.0f, 636.0f, 691.0f, 753.0f};
+            const size_t stripeCount = whiteTabby ? levels.size() : levels.size() - 1;
+            for (size_t i = 0; i < stripeCount; ++i) {
+                const float y = levels[i];
+                const float edge = whiteTabby ? PointFaceCenter + side * 200.0f : (side < 0.0f ? 475.0f : 874.0f);
+                const float length = (y == 553.0f ? 35.0f : 65.0f) + (whiteTabby ? 15.0f : 0.0f);
                 GraphicsPath stripe;
                 stripe.AddBezier(edge, y, edge - side * 23.0f, y + 10.0f,
                                  edge - side * 44.0f, y + 16.0f, edge - side * length, y + 17.0f);
                 deformPath(stripe, motion);
                 strokePath(g, stripe, fur.marking, y < 600.0f ? 21.0f : 27.0f);
             }
+        }
+        if (whiteTabby) {
+            drawWhiteTabbyBib(g, fur.sock, motion);
+            return;
         }
         GraphicsPath bib;
         bib.AddBezier(692.0f, 535.0f, 708.0f, 532.0f, 719.0f, 573.0f, 804.0f, 596.0f);
@@ -321,7 +380,7 @@ inline void drawFlanks(Graphics& g, CatCoatTheme coat, const Palette& fur, Motio
     }
 }
 
-inline void catBody(Graphics& g, const HeadPose& pose, GraphicsPath& outline, CatCoatTheme coat, const Palette& fur) {
+inline void bodyOutline(GraphicsPath& outline) {
     outline.AddBezier(497.0f, 480.0f, 494.0f, 409.0f, 512.0f, 287.0f, 554.0f, 298.0f);
     outline.AddBezier(554.0f, 298.0f, 588.0f, 304.0f, 628.0f, 346.0f, 649.0f, 379.0f);
     outline.AddBezier(649.0f, 379.0f, 664.0f, 375.0f, 686.0f, 375.0f, 700.0f, 379.0f);
@@ -334,16 +393,12 @@ inline void catBody(Graphics& g, const HeadPose& pose, GraphicsPath& outline, Ca
     outline.AddBezier(565.0f, 851.0f, 453.0f, 827.0f, 430.0f, 755.0f, 498.0f, 604.0f);
     outline.AddBezier(498.0f, 604.0f, 461.0f, 576.0f, 465.0f, 524.0f, 497.0f, 480.0f);
     outline.CloseFigure();
-    // Blend the head movement down the shoulders while keeping the bottom seated.
+}
+
+inline void catBody(Graphics& g, const HeadPose& pose, GraphicsPath& outline, CatCoatTheme coat, const Palette& fur) {
+    bodyOutline(outline);
     auto headMotion = [&](PointF* points, INT count) {
-        std::vector<PointF> moved(points, points + count);
-        pose.transform.TransformPoints(moved.data(), count);
-        for (INT i = 0; i < count; ++i) {
-            const float t = std::clamp((755.0f - points[i].Y) / 145.0f, 0.0f, 1.0f);
-            const float follow = t * t * (3.0f - 2.0f * t);
-            points[i].X += (moved[i].X - points[i].X) * follow;
-            points[i].Y += (moved[i].Y - points[i].Y) * follow;
-        }
+        pose.moveBodyPoints(points, count);
     };
     deformPath(outline, headMotion);
     brushPath(g, outline, fur.body);
@@ -359,7 +414,7 @@ inline void catBody(Graphics& g, const HeadPose& pose, GraphicsPath& outline, Ca
     strokePath(g, outline, fur.outline, 14.5f);
 }
 
-inline Color eyeColor(EyeColorTheme theme, CatCoatTheme coat) {
+inline Color eyeColor(EyeColorTheme theme, CatCoatTheme coat, bool left = false) {
     switch (theme) {
         case EyeColorTheme::SiameseBlue: return Color(138, 200, 230);
         case EyeColorTheme::IceCyan: return Color(152, 222, 223);
@@ -369,6 +424,7 @@ inline Color eyeColor(EyeColorTheme theme, CatCoatTheme coat) {
         case EyeColorTheme::WarmAmber:
             return coat == CatCoatTheme::BritishBlue ? Color(255, 211, 118) : Color(240, 222, 124);
         case EyeColorTheme::Ivory: return Color(255, 253, 247);
+        case EyeColorTheme::BlueGold: return left ? Color(113, 211, 246) : Color(255, 215, 94);
     }
     return Color(240, 222, 124);
 }
@@ -538,7 +594,7 @@ inline void foreleg(Graphics& g, PointF paw, bool left, GraphicsPath& body, CatC
         brushPath(g, sock, fur.sock);
         g.Restore(clipped);
     } else {
-        brushPath(g, fill, fur.body);
+        brushPath(g, fill, coat == CatCoatTheme::WhiteTabby ? fur.sock : fur.body);
     }
     strokePath(g, inner, fur.limbLine, 8.5f);
     strokePath(g, cap, fur.outline, 8.5f);
@@ -590,16 +646,20 @@ inline void draw(Graphics& g, const CatPhysics& cat, CatCoatTheme coat, EyeColor
 
     const auto face = g.Save();
     g.MultiplyTransform(&pose.transform);
-    const Color iris = eyeColor(theme, coat);
-    const bool centeredFace = coat == CatCoatTheme::Siamese || coat == CatCoatTheme::Ragdoll;
+    const Color leftIris = eyeColor(theme, coat, true);
+    const Color rightIris = eyeColor(theme, coat);
+    const bool white = coat == CatCoatTheme::SolidWhite;
+    const bool centeredFace = coat == CatCoatTheme::Siamese || coat == CatCoatTheme::Ragdoll ||
+                              coat == CatCoatTheme::WhiteTabby || white;
     if (centeredFace) {
         constexpr float width = 85.0f;
         for (float offset : {-69.0f, 69.0f}) {
-            eye(g, PointFaceCenter + offset - width * 0.5f, 495.0f, width, 84.0f, cat, iris, fur.outline);
+            eye(g, PointFaceCenter + offset - width * 0.5f, 495.0f, width, 84.0f,
+                cat, offset < 0.0f ? leftIris : rightIris, fur.outline);
         }
     } else {
-        eye(g, 583.0f, 498.5f, 88.0f, 83.0f, cat, iris, fur.outline);
-        eye(g, 723.0f, 491.5f, 82.0f, 85.0f, cat, iris, fur.outline);
+        eye(g, 583.0f, 498.5f, 88.0f, 83.0f, cat, leftIris, fur.outline);
+        eye(g, 723.0f, 491.5f, 82.0f, 85.0f, cat, rightIris, fur.outline);
     }
     whiskers(g, fur.whisker, centeredFace);
     g.Restore(face);
