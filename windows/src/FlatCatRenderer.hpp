@@ -17,6 +17,8 @@ inline constexpr float OriginY = 852.0f;
 inline constexpr float MotionAmount = CatPhysics::BodyMotionAmount;
 inline constexpr float BodyDrop = 6.5f;
 inline constexpr float PointFaceCenter = 673.0f;
+inline constexpr float SilhouetteStroke = 11.0f;
+inline constexpr float PawStroke = 8.5f;
 
 inline float seatX(const CatPhysics& cat) {
     return CatPhysics::SeatAnchor.x + cat.bodyShiftX.value * MotionAmount;
@@ -136,7 +138,7 @@ inline void tail(Graphics& g, CatCoatTheme coat, const Palette& fur) {
     brushPath(g, shape, fur.tail);
     if (coat != CatCoatTheme::Calico && coat != CatCoatTheme::Tuxedo &&
         coat != CatCoatTheme::GingerTabby && coat != CatCoatTheme::WhiteTabby) {
-        strokePath(g, shape, fur.outline, 14.5f);
+        strokePath(g, shape, fur.outline, SilhouetteStroke);
         return;
     }
     const auto state = g.Save();
@@ -153,7 +155,7 @@ inline void tail(Graphics& g, CatCoatTheme coat, const Palette& fur) {
     }
     if (coat == CatCoatTheme::WhiteTabby) {
         g.Restore(state);
-        strokePath(g, shape, fur.outline, 14.5f);
+        strokePath(g, shape, fur.outline, SilhouetteStroke);
         return;
     }
     if (coat == CatCoatTheme::Calico) {
@@ -171,7 +173,7 @@ inline void tail(Graphics& g, CatCoatTheme coat, const Palette& fur) {
     tip.CloseFigure();
     brushPath(g, tip, coat == CatCoatTheme::Calico ? fur.marking : fur.sock);
     g.Restore(state);
-    strokePath(g, shape, fur.outline, 14.5f);
+    strokePath(g, shape, fur.outline, SilhouetteStroke);
 }
 
 inline void drawCalicoFace(Graphics& g) {
@@ -411,7 +413,7 @@ inline void catBody(Graphics& g, const HeadPose& pose, GraphicsPath& outline, Ca
     if (coat != CatCoatTheme::Siamese) drawEars(g, fur.ear);
     g.Restore(face);
     g.Restore(clipped);
-    strokePath(g, outline, fur.outline, 14.5f);
+    strokePath(g, outline, fur.outline, SilhouetteStroke);
 }
 
 inline Color eyeColor(EyeColorTheme theme, CatCoatTheme coat, bool left = false) {
@@ -524,7 +526,7 @@ inline void hindPaw(Graphics& g, float x, float y, float angle, const Palette& f
     GraphicsPath foot;
     foot.AddEllipse(-46.0f, -27.0f, 92.0f, 54.0f);
     brushPath(g, foot, fur.hindPaw);
-    strokePath(g, foot, fur.outline, 8.5f);
+    strokePath(g, foot, fur.outline, PawStroke);
     g.Restore(state);
     toeLines(g, pose, 13.0f, 24.0f, fur.outline);
 }
@@ -551,17 +553,20 @@ inline void foreleg(Graphics& g, PointF paw, bool left, GraphicsPath& body, CatC
     const float start = -distance;
     const float elbow = start * 0.72f;
     const float wrist = start * 0.29f;
+    // Bow both sides outward together, leaving the shoulder and paw pad in place.
+    const float elbowBend = std::clamp((distance - 132.0f) * 0.31f, 0.0f, 68.0f);
+    const float wristBend = elbowBend * 0.28f;
     GraphicsPath inner;
-    inner.AddBezier(point(shoulderWidth, start), point(elbowWidth, elbow),
-                    point(wristWidth, wrist), point(wristWidth, -11.0f));
+    inner.AddBezier(point(shoulderWidth, start), point(elbowWidth - elbowBend, elbow),
+                    point(wristWidth - wristBend, wrist), point(wristWidth, -11.0f));
     GraphicsPath cap;
     cap.AddBezier(point(wristWidth, -11.0f), point(44.0f, 18.0f),
                   point(29.0f, 38.0f), point(0.0f, 39.0f));
     cap.AddBezier(point(0.0f, 39.0f), point(-29.0f, 40.0f),
                   point(-42.0f, 17.0f), point(-wristWidth, -11.0f));
     GraphicsPath outer;
-    outer.AddBezier(point(-wristWidth, -11.0f), point(-wristWidth, wrist),
-                    point(-elbowWidth, elbow), point(-shoulderWidth, start));
+    outer.AddBezier(point(-wristWidth, -11.0f), point(-wristWidth - wristBend, wrist),
+                    point(-elbowWidth - elbowBend, elbow), point(-shoulderWidth, start));
     GraphicsPath fill;
     fill.AddPath(&inner, FALSE);
     fill.AddPath(&cap, TRUE);
@@ -596,11 +601,11 @@ inline void foreleg(Graphics& g, PointF paw, bool left, GraphicsPath& body, CatC
     } else {
         brushPath(g, fill, coat == CatCoatTheme::WhiteTabby ? fur.sock : fur.body);
     }
-    strokePath(g, inner, fur.limbLine, 8.5f);
-    strokePath(g, cap, fur.outline, 8.5f);
+    strokePath(g, inner, fur.limbLine, PawStroke);
+    strokePath(g, cap, fur.outline, PawStroke);
     const auto state = g.Save();
     g.SetClip(&body, CombineModeExclude);
-    strokePath(g, outer, fur.outline, 8.5f);
+    strokePath(g, outer, fur.outline, PawStroke);
     g.Restore(state);
 
     const Matrix pose(uy, -ux, ux, uy, paw.X, paw.Y);
